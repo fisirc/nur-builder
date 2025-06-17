@@ -1,0 +1,25 @@
+# Imagen base con Go
+FROM golang:1.22 as builder
+
+# Instalar soporte para WebAssembly
+ENV GOOS=js
+ENV GOARCH=wasm
+
+# Crear carpeta de trabajo
+WORKDIR /app
+
+# Entrypoint por defecto que clona, compila y sale
+ENTRYPOINT [ "sh", "-c", "\
+    if [ -z \"$CLONE_URL\" ] || [ -z \"$GITHUB_TOKEN\" ]; then \
+        echo '❌ Faltan variables CLONE_URL o GITHUB_TOKEN' >&2; exit 1; \
+    fi && \
+    git clone --depth=1 https://x-access-token:$GITHUB_TOKEN@${CLONE_URL#https://} /app && \
+    cd /app && \
+    if [ -f nurfile.yaml ]; then \
+        echo '📦 Running Go WASM build...' && \
+        BUILD_CMD=$(grep 'command:' nurfile.yaml | sed 's/command: //') && \
+        echo \"▶️ \$BUILD_CMD\" && \
+        eval \$BUILD_CMD; \
+    else \
+        echo '❌ nurfile.yaml not found' >&2; exit 1; \
+    fi" ]

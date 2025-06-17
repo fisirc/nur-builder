@@ -1,59 +1,69 @@
-use crate::nur::config::NurConfig;
+use std::{fs};
 use tokio::process::Command;
+use uuid::Uuid;
 
-pub async fn run_nur_build(dir: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let config_path = format!("{}/nurfile.yaml", dir);
-    let contents = std::fs::read_to_string(&config_path)?;
-    let config: NurConfig = serde_yaml::from_str(&contents)?;
+pub async fn run_nur_build(clone_url: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let tmp_dir = format!("/tmp/nur-{}", Uuid::new_v4());
+    fs::create_dir_all(&tmp_dir)?;
 
-    println!("📦 Building {}...", config.name);
-    println!("📄 Raw build command from nurfile: {}", config.build.command);
-    println!("📄 Expected output path from nurfile: {}", config.build.output);
-
-    // Detectar si es Rust + WASM
-    let is_rust_wasm = config.language.to_lowercase() == "rust" && config.build.output.ends_with(".wasm");
-
-    // Forzar comando correcto para Rust WASM
-    let (command, args): (String, Vec<&str>) = if is_rust_wasm {
-        println!("⚙️  Rust WASM project detected. Overriding build command with cargo wasm32-wasip1 build.");
-        (
-            "cargo".to_string(),
-            vec!["build", "--target", "wasm32-wasip1", "--release"],
-        )
-    } else {
-        let mut parts = config.build.command.split_whitespace();
-        let cmd = parts.next().unwrap_or("sh").to_string();
-        (cmd, parts.collect())
-    };
-
-    println!("🚀 Running: {} {:?}", command, args);
-
-    let output = Command::new(&command)
-        .args(&args)
-        .current_dir(dir)
+    println!("📥 Cloning repo into: {}", tmp_dir);
+    let output = Command::new("git")
+        .args(["clone", "--depth=1", clone_url, &tmp_dir])
         .output()
         .await?;
 
     if !output.status.success() {
-        println!("❌ Build failed:\n{}", String::from_utf8_lossy(&output.stderr));
-        return Err("Build failed".into());
+        println!("❌ Git clone failed:\n{}", String::from_utf8_lossy(&output.stderr));
+        return Err("Git clone failed".into());
     }
 
-    // Validar que el output especificado exista
-    let output_path = format!("{}/{}", dir, config.build.output);
-    println!("🔍 Checking if build output exists at: {}", output_path);
+    // ✅ Obtener info del último commit
+    let log_output = Command::new("git")
+        .args(["log", "-1", "--pretty=format:%H%n%s"])
+        .current_dir(&tmp_dir)
+        .output()
+        .await?;
 
-    if !std::path::Path::new(&output_path).exists() {
-        // Sugerencia inteligente para Rust/WASM
-        if is_rust_wasm {
-            let suggested_name = config.name.replace("-", "_"); // Coincide con nombre de crate generado por Rust
-            let suggested_path = format!("{}/target/wasm32-wasip1/release/{}.wasm", dir, suggested_name);
-            println!("💡 Hint: Common Rust WASM output is `{}`", suggested_path);
-        }
+    if log_output.status.success() {
+        let output_str = String::from_utf8_lossy(&log_output.stdout);
+        let mut lines = output_str.lines();
+        let commit_hash = lines.next().unwrap_or("unknown");
+        let commit_msg = lines.next().unwrap_or("no commit message");
 
-        return Err(format!("❌ Build output file not found at: {}", output_path).into());
+        println!("🔐 Last commit hash: {}", commit_hash);
+        println!("📝 Commit message: {}", commit_msg);
+    } else {
+        println!("⚠️ Failed to get commit info:\n{}", String::from_utf8_lossy(&log_output.stderr));
     }
 
-    println!("✅ Build output found at: {}", output_path);
+    let config_path = format!("{}/nurfile.yaml", tmp_dir);
+    let contents = fs::read_to_string(&config_path)?;
+    let config: crate::nur::config::NurConfig = serde_yaml::from_str(&contents)?;
+
+    let image = match config.language.to_lowercase().as_str() {
+        "rust" => "nur/rust-builder",
+        "node" => "nur/node-builder",
+        "go" => "nur/go-builder",
+        _ => return Err(format!("Unsupported language: {}", config.language).into()),
+    };
+
+    let docker_command = format!(
+        "docker run --rm -v {tmp_dir}:/app -w /app {image} sh -c '{}'",
+        config.build.command
+    );
+
+    println!("🐳 Running build: {}", docker_command);
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(&docker_command)
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        println!("❌ Docker build failed:\n{}", String::from_utf8_lossy(&output.stderr));
+        return Err("Docker build failed".into());
+    }
+
+    println!("✅ Build succeeded for: {}", config.name);
     Ok(())
 }

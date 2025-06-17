@@ -1,0 +1,10 @@
+version: "3.9"
+services:
+  rust-builder:
+    build:
+      context: ./docker/rust
+    image: nur/rust-builder
+  go-builder:
+    build:
+      context: ./docker/go
+    image: nur/go-builder

@@ -66,51 +66,15 @@ pub async fn webhook_handler(
     let token_json: serde_json::Value = token_res.json().await.unwrap();
     let token = token_json["token"].as_str().unwrap();
 
-    // ✅ 5. Clonar el repo
+    // ✅ 5. URL para clonar la repo
     let clone_url = event
         .repository
         .clone_url
         .replace("https://", &format!("https://x-access-token:{}@", token));
     let repo_name = event.repository.full_name.split('/').last().unwrap();
 
-    println!("📥 Cloning {}...", clone_url);
-
-    // Clone the repo (shallow)
-    let clone_output = Command::new("git")
-        .args(["clone", "--depth=1", &clone_url, repo_name])
-        .output()
-        .await;
-
-    if let Err(e) = clone_output {
-        println!("❌ Error cloning repo: {:?}", e);
-        return StatusCode::INTERNAL_SERVER_ERROR;
-    }
-
-    // Get latest commit hash and message
-    let log_output = Command::new("git")
-        .args(["log", "-1", "--pretty=format:%H%n%s"])
-        .current_dir(repo_name)
-        .output()
-        .await;
-
-    match log_output {
-        Ok(output) => {
-            let output_str = String::from_utf8_lossy(&output.stdout);
-            let mut lines = output_str.lines();
-            let commit_hash = lines.next().unwrap_or("unknown");
-            let commit_msg = lines.next().unwrap_or("no commit message");
-
-            println!("🔐 Cloned commit hash: {}", commit_hash);
-            println!("📝 Commit message: {}", commit_msg);
-        }
-        Err(e) => {
-            println!("⚠️ Failed to get commit info: {:?}", e);
-        }
-    }
-
-
     // ✅ 6. Ejecutar build
-    match run_nur_build(repo_name).await {
+    match run_nur_build(&clone_url).await {
         Ok(_) => {
             println!("✅ Build completed successfully.");
             StatusCode::OK
