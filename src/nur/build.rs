@@ -1,6 +1,7 @@
-use std::{fs};
+use std::{fs, path::Path};
 use tokio::process::Command;
 use uuid::Uuid;
+use crate::nur::upload_s3::{upload_to_s3}; 
 
 pub async fn run_nur_build(clone_url: &str) -> Result<(), Box<dyn std::error::Error>> {
     let tmp_dir = format!("/tmp/nur-{}", Uuid::new_v4());
@@ -47,8 +48,11 @@ pub async fn run_nur_build(clone_url: &str) -> Result<(), Box<dyn std::error::Er
         _ => return Err(format!("Unsupported language: {}", config.language).into()),
     };
 
+    let uid = users::get_current_uid();
+    let gid = users::get_current_gid();
+
     let docker_command = format!(
-        "docker run --rm -v {tmp_dir}:/app -w /app {image} sh -c '{}'",
+        "docker run --rm -v {tmp_dir}:/app -w /app --user {uid}:{gid} {image} sh -c '{}'",
         config.build.command
     );
 
@@ -65,5 +69,25 @@ pub async fn run_nur_build(clone_url: &str) -> Result<(), Box<dyn std::error::Er
     }
 
     println!("✅ Build succeeded for: {}", config.name);
+
+    let output_path = Path::new(&tmp_dir).join(&config.build.output);
+    let zip_path = output_path.with_extension("zip");
+
+    println!("📦 Zipping build output: {}", output_path.display());
+    crate::nur::zip::zip_any(&output_path, &zip_path)?; 
+
+    let artifact_path = &zip_path;
+    let s3_bucket = std::env::var("S3_BUCKET")?;
+
+    let file_name = zip_path
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("build-wasm.zip"))
+        .to_string_lossy();
+
+    let s3_key = format!("builds/{}/{}", config.name, file_name);
+
+    upload_to_s3(&s3_bucket, &s3_key, artifact_path).await?;
+    println!("🚀 Artifact uploaded to s3://{}/{}", s3_bucket, s3_key);
+
     Ok(())
 }

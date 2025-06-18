@@ -15,7 +15,6 @@ use axum::body::{Body};
 use std::{
     sync::Arc,
 };
-use tokio::process::Command;
 
 pub async fn webhook_handler(
     headers: HeaderMap,
@@ -71,7 +70,6 @@ pub async fn webhook_handler(
         .repository
         .clone_url
         .replace("https://", &format!("https://x-access-token:{}@", token));
-    let repo_name = event.repository.full_name.split('/').last().unwrap();
 
     // ✅ 6. Ejecutar build
     match run_nur_build(&clone_url).await {
