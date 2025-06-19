@@ -1,7 +1,9 @@
 use std::{fs, path::Path};
 use tokio::process::Command;
 use uuid::Uuid;
-use crate::nur::upload_s3::{upload_to_s3}; 
+use crate::nur::upload_s3::upload_to_s3;
+use crate::nur::config::{NurFile};
+use users::{get_current_uid, get_current_gid};
 
 pub async fn run_nur_build(clone_url: &str) -> Result<(), Box<dyn std::error::Error>> {
     let tmp_dir = format!("/tmp/nur-{}", Uuid::new_v4());
@@ -39,55 +41,76 @@ pub async fn run_nur_build(clone_url: &str) -> Result<(), Box<dyn std::error::Er
 
     let config_path = format!("{}/nurfile.yaml", tmp_dir);
     let contents = fs::read_to_string(&config_path)?;
-    let config: crate::nur::config::NurConfig = serde_yaml::from_str(&contents)?;
+    let config: NurFile = serde_yaml::from_str(&contents)?;
 
-    let image = match config.language.to_lowercase().as_str() {
-        "rust" => "nur/rust-builder",
-        "node" => "nur/node-builder",
-        "go" => "nur/go-builder",
-        _ => return Err(format!("Unsupported language: {}", config.language).into()),
-    };
+    let uid = get_current_uid();
+    let gid = get_current_gid();
 
-    let uid = users::get_current_uid();
-    let gid = users::get_current_gid();
-
-    let docker_command = format!(
-        "docker run --rm -v {tmp_dir}:/app -w /app --user {uid}:{gid} {image} sh -c '{}'",
-        config.build.command
-    );
-
-    println!("🐳 Running build: {}", docker_command);
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(&docker_command)
-        .output()
-        .await?;
-
-    if !output.status.success() {
-        println!("❌ Docker build failed:\n{}", String::from_utf8_lossy(&output.stderr));
-        return Err("Docker build failed".into());
-    }
-
-    println!("✅ Build succeeded for: {}", config.name);
-
-    let output_path = Path::new(&tmp_dir).join(&config.build.output);
-    let zip_path = output_path.with_extension("zip");
-
-    println!("📦 Zipping build output: {}", output_path.display());
-    crate::nur::zip::zip_any(&output_path, &zip_path)?; 
-
-    let artifact_path = &zip_path;
     let s3_bucket = std::env::var("S3_BUCKET")?;
 
-    let file_name = zip_path
-        .file_name()
-        .unwrap_or_else(|| std::ffi::OsStr::new("build-wasm.zip"))
-        .to_string_lossy();
+    let builds_dir = Path::new(&tmp_dir).join("builds");
+    fs::create_dir_all(&builds_dir)?;
 
-    let s3_key = format!("builds/{}/{}", config.name, file_name);
+    for func in config.functions {
+        println!("⚙️ Building function: {}", func.name);
 
-    upload_to_s3(&s3_bucket, &s3_key, artifact_path).await?;
-    println!("🚀 Artifact uploaded to s3://{}/{}", s3_bucket, s3_key);
+        let image = match func.template.to_lowercase().as_str() {
+            "rust" => "nur/rust-builder",
+            "node" => "nur/node-builder",
+            "go" => "nur/go-builder",
+            _ => return Err(format!("Unsupported template: {}", func.template).into()),
+        };
+
+        let docker_command = format!(
+            "docker run --rm -v {tmp_dir}:/app -w /app/{dir} --user {uid}:{gid} {image} sh -c '{}'",
+            func.build.command,
+            dir = func.directory.trim_start_matches('/')
+        );
+
+        println!("🐳 Running build: {}", docker_command);
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(&docker_command)
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            println!("❌ Build failed for {}:\n{}", func.name, String::from_utf8_lossy(&output.stderr));
+            continue;
+        }
+
+        println!("✅ Build succeeded for: {}", func.name);
+
+        let output_path = Path::new(&tmp_dir)
+            .join(func.directory.trim_start_matches('/'))
+            .join(&func.build.output.trim_start_matches('/'));
+
+        let ext = output_path.extension().unwrap_or_default().to_string_lossy();
+        let final_name = format!("{}.{}", func.name, ext);
+        let dest_path = builds_dir.join(final_name);
+
+        println!("📁 Moving output to: {}", dest_path.display());
+        fs::copy(&output_path, &dest_path)?;
+    }
+
+    let repo_name = extract_repo_name(clone_url);
+    let final_zip_name = format!("{}.zip", repo_name);
+    let final_zip_path = Path::new(&tmp_dir).join(&final_zip_name);
+
+    println!("📦 Creating final zip: {}", final_zip_path.display());
+    crate::nur::zip::zip_any(&builds_dir, &final_zip_path)?;    
+
+    let s3_key = format!("builds/{}", final_zip_name);
+    upload_to_s3(&s3_bucket, &s3_key, &final_zip_path).await?;
+    println!("🚀 Uploaded to s3://{}/{}", s3_bucket, s3_key);
 
     Ok(())
+}
+
+fn extract_repo_name(clone_url: &str) -> String {
+    Path::new(clone_url)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("repo")
+        .to_string()
 }

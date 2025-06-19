@@ -1,14 +1,20 @@
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
-pub struct NurBuild {
-    pub command: String,
-    pub output: String,
+pub struct NurFile {
+    pub functions: Vec<NurFunction>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct NurConfig {
+pub struct NurFunction {
     pub name: String,
-    pub language: String,
+    pub directory: String,
+    pub template: String,
     pub build: NurBuild,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NurBuild {
+    pub command: String,
+    pub output: String,
 }
