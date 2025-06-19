@@ -1,13 +1,23 @@
+use crate::nur::config::NurFile;
+use crate::nur::upload_s3::upload_to_s3;
+use crate::supabase::test::{get_project_id, get_supabase_client, insert_project_build};
 use std::{fs, path::Path};
 use tokio::process::Command;
+use users::{get_current_gid, get_current_uid};
 use uuid::Uuid;
-use crate::nur::upload_s3::upload_to_s3;
-use crate::nur::config::{NurFile};
-use users::{get_current_uid, get_current_gid};
 
-pub async fn run_nur_build(clone_url: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_nur_build(
+    clone_url: &str,
+    repo_id: &u64,
+) -> Result<(), Box<dyn std::error::Error>> {
     let tmp_dir = format!("/tmp/nur-{}", Uuid::new_v4());
     fs::create_dir_all(&tmp_dir)?;
+
+    let client = get_supabase_client().map_err(|e| format!("Supabase error: {}", e))?;
+    let repo_id_str = repo_id.to_string();
+    let project_id = get_project_id(&client, &repo_id_str).await?;
+
+    println!("🔗 Found Supabase project with ID: {}", project_id);
 
     println!("📥 Cloning repo into: {}", tmp_dir);
     let output = Command::new("git")
@@ -16,13 +26,22 @@ pub async fn run_nur_build(clone_url: &str) -> Result<(), Box<dyn std::error::Er
         .await?;
 
     if !output.status.success() {
-        println!("❌ Git clone failed:\n{}", String::from_utf8_lossy(&output.stderr));
+        println!(
+            "❌ Git clone failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         return Err("Git clone failed".into());
     }
 
+    let (mut commit_hash, mut commit_msg, mut branchname) = (
+        "unknown".to_string(),
+        "no commit message".to_string(),
+        "unknown".to_string(),
+    );
+
     // ✅ Obtener info del último commit
     let log_output = Command::new("git")
-        .args(["log", "-1", "--pretty=format:%H%n%s"])
+        .args(["log", "-1", "--pretty=format:%H%n%s%n%D"])
         .current_dir(&tmp_dir)
         .output()
         .await?;
@@ -30,13 +49,19 @@ pub async fn run_nur_build(clone_url: &str) -> Result<(), Box<dyn std::error::Er
     if log_output.status.success() {
         let output_str = String::from_utf8_lossy(&log_output.stdout);
         let mut lines = output_str.lines();
-        let commit_hash = lines.next().unwrap_or("unknown");
-        let commit_msg = lines.next().unwrap_or("no commit message");
+        commit_hash = lines.next().unwrap_or("unknown").to_string();
+        commit_msg = lines.next().unwrap_or("no commit message").to_string();
 
-        println!("🔐 Last commit hash: {}", commit_hash);
-        println!("📝 Commit message: {}", commit_msg);
-    } else {
-        println!("⚠️ Failed to get commit info:\n{}", String::from_utf8_lossy(&log_output.stderr));
+        let refs_line = lines.next().unwrap_or("");
+        if let Some(head_ref) = refs_line.split(',').find(|s| s.contains("HEAD ->")) {
+            if let Some(branch) = head_ref.split("->").nth(1) {
+                branchname = branch.trim().to_string();
+            }
+        }
+
+        println!("🔐 Last commit hash: {}", &commit_hash);
+        println!("📝 Commit message: {}", &commit_msg);
+        println!("🌿 Branch: {}", &branchname);
     }
 
     let config_path = format!("{}/nurfile.yaml", tmp_dir);
@@ -80,7 +105,11 @@ pub async fn run_nur_build(clone_url: &str) -> Result<(), Box<dyn std::error::Er
             .await?;
 
         if !output.status.success() {
-            println!("❌ Build failed for {}:\n{}", func.name, String::from_utf8_lossy(&output.stderr));
+            println!(
+                "❌ Build failed for {}:\n{}",
+                func.name,
+                String::from_utf8_lossy(&output.stderr)
+            );
             continue;
         }
 
@@ -90,32 +119,45 @@ pub async fn run_nur_build(clone_url: &str) -> Result<(), Box<dyn std::error::Er
             .join(func.directory.trim_start_matches('/'))
             .join(&func.build.output.trim_start_matches('/'));
 
-        let ext = output_path.extension().unwrap_or_default().to_string_lossy();
-        let final_name = format!("{}.{}", func.name, ext);
-        let dest_path = builds_dir.join(final_name);
+        // ✅ Copiar como "function.wasm"
+        let wasm_dest = builds_dir.join("function.wasm");
+        println!("📁 Copying output to: {}", wasm_dest.display());
+        fs::copy(&output_path, &wasm_dest)?;
 
-        println!("📁 Moving output to: {}", dest_path.display());
-        fs::copy(&output_path, &dest_path)?;
+        // ✅ Crear ZIP por función (con el archivo renombrado)
+        let zip_path = builds_dir.join(format!("{}.zip", func.name));
+        println!(
+            "📦 Zipping {} -> {}",
+            wasm_dest.display(),
+            zip_path.display()
+        );
+        crate::nur::zip::zip_any(&wasm_dest, &zip_path)?;
+
+        // ✅ Subir ZIP a S3
+        let s3_key = format!("builds/{}.zip", func.name);
+        println!(
+            "☁️ Uploading {} to s3://{}/{}",
+            func.name, s3_bucket, s3_key
+        );
+        upload_to_s3(&s3_bucket, &s3_key, &zip_path).await?;
+        println!("✅ Uploaded to s3://{}/{}", s3_bucket, s3_key);
+
+        fs::remove_file(&wasm_dest)?;
+    }
+    let insert_result = insert_project_build(
+        &client,
+        &project_id,
+        &commit_hash,
+        &branchname,
+        &repo_id,
+        &commit_msg,
+    )
+    .await;
+
+    match insert_result {
+        Ok(body) => println!("📬 Inserted build in Supabase: {}", body),
+        Err(e) => println!("❌ Failed to insert build in Supabase: {}", e),
     }
 
-    let repo_name = extract_repo_name(clone_url);
-    let final_zip_name = format!("{}.zip", repo_name);
-    let final_zip_path = Path::new(&tmp_dir).join(&final_zip_name);
-
-    println!("📦 Creating final zip: {}", final_zip_path.display());
-    crate::nur::zip::zip_any(&builds_dir, &final_zip_path)?;    
-
-    let s3_key = format!("builds/{}", final_zip_name);
-    upload_to_s3(&s3_bucket, &s3_key, &final_zip_path).await?;
-    println!("🚀 Uploaded to s3://{}/{}", s3_bucket, s3_key);
-
     Ok(())
-}
-
-fn extract_repo_name(clone_url: &str) -> String {
-    Path::new(clone_url)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("repo")
-        .to_string()
 }

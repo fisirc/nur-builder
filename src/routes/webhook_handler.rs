@@ -43,6 +43,8 @@ pub async fn webhook_handler(
         }
     };
 
+    let repo_id = event.repository.id;
+    println!("📦 Repo ID: {}", repo_id);
     println!("✅ Push event: {:?}", event.repository.full_name);
 
     // ✅ 3. Crear JWT
@@ -72,7 +74,7 @@ pub async fn webhook_handler(
         .replace("https://", &format!("https://x-access-token:{}@", token));
 
     // ✅ 6. Ejecutar build
-    match run_nur_build(&clone_url).await {
+    match run_nur_build(&clone_url, &repo_id).await {
         Ok(_) => {
             println!("✅ Build completed successfully.");
             StatusCode::OK

@@ -8,6 +8,7 @@ pub struct GitHubPushEvent {
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Repository {
+    pub id: u64,
     pub full_name: String,
     pub clone_url: String,
 }
