@@ -51,6 +51,11 @@ pub async fn run_nur_build(clone_url: &str) -> Result<(), Box<dyn std::error::Er
     let builds_dir = Path::new(&tmp_dir).join("builds");
     fs::create_dir_all(&builds_dir)?;
 
+    println!("🔍 Found {} functions:", config.functions.len());
+    for func in &config.functions {
+        println!("• {}", func.name);
+    }
+
     for func in config.functions {
         println!("⚙️ Building function: {}", func.name);
 

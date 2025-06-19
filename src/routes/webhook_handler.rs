@@ -79,7 +79,7 @@ pub async fn webhook_handler(
         }
         Err(e) => {
             println!("❌ Build error: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+            StatusCode::UNPROCESSABLE_ENTITY
         }
     }
 }
