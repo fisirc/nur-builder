@@ -34,14 +34,12 @@ pub async fn insert_project_build(
     project_id: &str,
     commit_sha: &str,
     branch_name: &str,
-    github_repo_id: &u64,
     commit_short_description: &str,
 ) -> Result<String, String> {
     let payload = json!([{
         "project_id": project_id,
         "commit_sha": commit_sha,
         "branch_name": branch_name,
-        "github_repo_id": github_repo_id,
         "commit_short_description": commit_short_description,
     }]);
 
@@ -108,8 +106,8 @@ pub async fn get_project_id(client: &Postgrest, github_repo_id: &str) -> Result<
         .await
         .map_err(|e| e.to_string())?;
 
-    let text = response.text().await.unwrap();
-    let json: Value = serde_json::from_str(&text).unwrap();
+    let text = response.text().await.map_err(|e| e.to_string())?;
+    let json: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
 
     match json
         .get(0)
@@ -125,14 +123,14 @@ pub async fn get_build_id(client: &Postgrest) -> Result<String, String> {
     let response = client
         .from("project_builds")
         .select("id")
-        .order("created_at")
+        .order("created_at.desc")
         .limit(1)
         .execute()
         .await
         .map_err(|e| e.to_string())?;
 
-    let text = response.text().await.unwrap();
-    let json: Value = serde_json::from_str(&text).unwrap();
+    let text = response.text().await.map_err(|e| e.to_string())?;
+    let json: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
 
     match json
         .get(0)

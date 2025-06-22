@@ -35,11 +35,11 @@ pub async fn upload_to_s3(
     let config = aws_config::defaults(BehaviorVersion::v2025_01_17())
         .region(region_provider)
         .credentials_provider(credentials)
-        .timeout_config(
-            TimeoutConfig::builder()
-                .operation_timeout(Duration::from_secs(15))
-                .build(),
-        )
+        // .timeout_config(
+        //     TimeoutConfig::builder()
+        //         .operation_timeout(Duration::from_secs(15))
+        //         .build(),
+        // )
         .load()
         .await;
 

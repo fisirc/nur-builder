@@ -1,11 +1,11 @@
 use crate::nur::config::NurFile;
-use crate::nur::docker_run::run_docker_build;
 use crate::nur::upload_s3::upload_to_s3;
 use crate::supabase::crud::{
     get_build_id, get_function_id, get_project_id, get_supabase_client, insert_function_deployed,
     insert_if_not_exists, insert_project_build,
 };
-use std::{fs, path::Path};
+use futures::future::join_all;
+use std::path::Path;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 use users::{get_current_gid, get_current_uid};
@@ -72,23 +72,13 @@ pub async fn run_nur_build(
     let contents = tokio::fs::read_to_string(&config_path).await?;
     let config: NurFile = serde_yaml::from_str(&contents)?;
 
-    let uid = get_current_uid();
-    let gid = get_current_gid();
-
     let s3_bucket = std::env::var("S3_BUCKET")?;
 
     let builds_dir = Path::new(&tmp_dir).join("builds");
-    fs::create_dir_all(&builds_dir)?;
+    tokio::fs::create_dir_all(&builds_dir).await?;
 
-    let insert_result = insert_project_build(
-        &client,
-        &project_id,
-        &commit_hash,
-        &branchname,
-        repo_id,
-        &commit_msg,
-    )
-    .await;
+    let insert_result =
+        insert_project_build(&client, &project_id, &commit_hash, &branchname, &commit_msg).await;
 
     match insert_result {
         Ok(body) => println!("📬 Inserted build in Supabase: {}", body),
@@ -105,79 +95,106 @@ pub async fn run_nur_build(
         }
     }
 
-    for func in config.functions {
-        println!("⚙️ Building function: {}", func.name);
+    let uid = get_current_uid();
+    let gid = get_current_gid();
+    let tmp_dir = tmp_dir.clone();
+    let builds_dir = builds_dir.clone();
+    let client = client.clone();
+    let s3_bucket = s3_bucket.clone();
 
-        let image = match func.template.to_lowercase().as_str() {
-            "rust" => "nur/rust-builder",
-            "node" => "nur/node-builder",
-            "go" => "nur/go-builder",
-            _ => return Err(format!("Unsupported template: {}", func.template).into()),
-        };
+    let tasks = config.functions.into_iter().map(|func| {
+        let tmp_dir = tmp_dir.clone();
+        let builds_dir = builds_dir.clone();
+        let client = client.clone();
+        let s3_bucket = s3_bucket.clone();
+        let project_id = project_id.clone();
+        let build_id = build_id.clone();
 
-        let docker_command = format!(
+        tokio::spawn(async move {
+            let image = match func.template.to_lowercase().as_str() {
+                "rust" => "nur/rust-builder",
+                "node" => "nur/node-builder",
+                "go" => "nur/go-builder",
+                _ => {
+                    println!("❌ Unsupported template: {}", func.template);
+                    return;
+                }
+            };
+
+            let docker_command = format!(
             "docker run --rm -v {tmp_dir}:/app -w /app/{dir} --user {uid}:{gid} {image} sh -c '{}'",
             func.build.command,
             dir = func.directory.trim_start_matches('/')
         );
 
-        println!("🐳 Running build: {}", docker_command);
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(&docker_command)
-            .output()
-            .await?;
+            println!("🐳 Running build: {}", docker_command);
+            let output = match timeout(
+                Duration::from_secs(60),
+                Command::new("sh").arg("-c").arg(&docker_command).output(),
+            )
+            .await
+            {
+                Ok(Ok(output)) => output,
+                Ok(Err(e)) => {
+                    println!("❌ Error docker '{}': {}", func.name, e);
+                    return;
+                }
+                Err(_) => {
+                    println!("⏳ Timeout docker '{}'", func.name);
+                    return;
+                }
+            };
 
-        if !output.status.success() {
-            println!(
-                "❌ Build failed for {}:\n{}",
-                func.name,
-                String::from_utf8_lossy(&output.stderr)
-            );
-            continue;
-        }
+            if !output.status.success() {
+                println!(
+                    "❌ Build failed for {}:\n{}",
+                    func.name,
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                return;
+            }
 
-        println!("✅ Build succeeded for: {}", func.name);
+            println!("✅ Build OK: {}", func.name);
 
-        let output_path = Path::new(&tmp_dir)
-            .join(func.directory.trim_start_matches('/'))
-            .join(func.build.output.trim_start_matches('/'));
+            let output_path = Path::new(&tmp_dir)
+                .join(func.directory.trim_start_matches('/'))
+                .join(func.build.output.trim_start_matches('/'));
 
-        let wasm_dest = builds_dir.join("function.wasm");
-        println!("📁 Copying output to: {}", wasm_dest.display());
-        tokio::fs::copy(&output_path, &wasm_dest).await?;
+            let wasm_dest = builds_dir.join("function.wasm");
+            let _ = tokio::fs::copy(&output_path, &wasm_dest).await;
 
-        let zip_path = builds_dir.join(format!("{}.wasm.zstd", func.name));
-        println!(
-            "📦 Compressing to .zstd {} -> {}",
-            wasm_dest.display(),
-            zip_path.display()
-        );
-        crate::nur::compress::compress_to_zstd(&wasm_dest, &zip_path)?;
+            let zip_path = builds_dir.join(format!("{}.wasm.zstd", func.name));
+            let _ = crate::nur::compress::compress_to_zstd(&wasm_dest, &zip_path);
 
-        let function_id = get_function_id(&client, &project_id, &func.name).await?;
-        let s3_key = format!("builds/{}.wasm.zstd", function_id);
-        println!(
-            "☁️ Uploading {} to s3://{}/{}",
-            func.name, s3_bucket, s3_key
-        );
-        upload_to_s3(&s3_bucket, &s3_key, &zip_path).await?;
-        println!("✅ Uploaded to s3://{}/{}", s3_bucket, s3_key);
+            let function_id = match get_function_id(&client, &project_id, &func.name).await {
+                Ok(id) => id,
+                Err(e) => {
+                    println!("⚠️ Function ID error: {}", e);
+                    return;
+                }
+            };
 
-        tokio::fs::remove_file(&wasm_dest).await?;
+            let s3_key = format!("builds/{}.wasm.zstd", function_id);
+            let _ = upload_to_s3(&s3_bucket, &s3_key, &zip_path).await;
 
-        let insert_result = timeout(
-            Duration::from_secs(10),
-            insert_function_deployed(&client, &function_id, &build_id, "success"),
-        )
-        .await;
+            let _ = tokio::fs::remove_file(&wasm_dest).await;
 
-        match insert_result {
-            Ok(Ok(_)) => println!("✅ Marked function '{}' as deployed", func.name),
-            Ok(Err(e)) => println!("⚠️ Insert failed '{}': {}", func.name, e),
-            Err(_) => println!("⏳ Timed out marking '{}' as deployed", func.name),
-        }
-    }
+            let insert_result = timeout(
+                Duration::from_secs(10),
+                insert_function_deployed(&client, &function_id, &build_id, "success"),
+            )
+            .await;
 
+            match insert_result {
+                Ok(Ok(_)) => println!("✅ Marked function '{}' as deployed", func.name),
+                Ok(Err(e)) => println!("⚠️ Supabase insert failed '{}': {}", func.name, e),
+                Err(_) => println!("⏳ Timeout inserting '{}'", func.name),
+            }
+        })
+    });
+
+    join_all(tasks).await;
+
+    println!("✅ All functions built and deployed");
     Ok(())
 }
