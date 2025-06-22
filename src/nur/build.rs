@@ -16,7 +16,7 @@ pub async fn run_nur_build(
     repo_id: &u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let tmp_dir = format!("/tmp/nur-{}", Uuid::new_v4());
-    fs::create_dir_all(&tmp_dir)?;
+    tokio::fs::create_dir_all(&tmp_dir).await?;
 
     let client = get_supabase_client().map_err(|e| format!("Supabase error: {}", e))?;
     let repo_id_str = repo_id.to_string();
@@ -69,7 +69,7 @@ pub async fn run_nur_build(
     }
 
     let config_path = format!("{}/nurfile.yaml", tmp_dir);
-    let contents = fs::read_to_string(&config_path)?;
+    let contents = tokio::fs::read_to_string(&config_path).await?;
     let config: NurFile = serde_yaml::from_str(&contents)?;
 
     let uid = get_current_uid();
@@ -115,20 +115,25 @@ pub async fn run_nur_build(
             _ => return Err(format!("Unsupported template: {}", func.template).into()),
         };
 
-        let container_name = format!("nur-build-{}", func.name);
         let docker_command = format!(
-            "docker run --name {container_name} \
-        -v {tmp_dir}:/app \
-        -w /app/{dir} \
-        --user {uid}:{gid} \
-        {image} sh -c '{}'",
+            "docker run --rm -v {tmp_dir}:/app -w /app/{dir} --user {uid}:{gid} {image} sh -c '{}'",
             func.build.command,
-            container_name = container_name,
             dir = func.directory.trim_start_matches('/')
         );
 
-        if let Err(e) = run_docker_build(&container_name, &docker_command, 60, true).await {
-            println!("{}", e);
+        println!("🐳 Running build: {}", docker_command);
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(&docker_command)
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            println!(
+                "❌ Build failed for {}:\n{}",
+                func.name,
+                String::from_utf8_lossy(&output.stderr)
+            );
             continue;
         }
 
@@ -140,7 +145,7 @@ pub async fn run_nur_build(
 
         let wasm_dest = builds_dir.join("function.wasm");
         println!("📁 Copying output to: {}", wasm_dest.display());
-        fs::copy(&output_path, &wasm_dest)?;
+        tokio::fs::copy(&output_path, &wasm_dest).await?;
 
         let zip_path = builds_dir.join(format!("{}.wasm.zstd", func.name));
         println!(
@@ -159,7 +164,7 @@ pub async fn run_nur_build(
         upload_to_s3(&s3_bucket, &s3_key, &zip_path).await?;
         println!("✅ Uploaded to s3://{}/{}", s3_bucket, s3_key);
 
-        fs::remove_file(&wasm_dest)?;
+        tokio::fs::remove_file(&wasm_dest).await?;
 
         let insert_result = timeout(
             Duration::from_secs(10),
