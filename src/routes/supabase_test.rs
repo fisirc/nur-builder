@@ -1,9 +1,9 @@
-use axum::response::IntoResponse;
+use crate::supabase::crud;
 use axum::http::StatusCode;
-use crate::supabase::test;
+use axum::response::IntoResponse;
 
 pub async fn supabase_route() -> impl IntoResponse {
-    match test::test_supabase().await {
+    match crud::test_supabase().await {
         Ok(body) => (StatusCode::OK, body),
         Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {}", err)),
     }

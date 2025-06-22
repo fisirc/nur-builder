@@ -1,8 +1,13 @@
 use crate::nur::config::NurFile;
+use crate::nur::docker_run::run_docker_build;
 use crate::nur::upload_s3::upload_to_s3;
-use crate::supabase::test::{get_project_id, get_supabase_client, insert_project_build};
+use crate::supabase::crud::{
+    get_build_id, get_function_id, get_project_id, get_supabase_client, insert_function_deployed,
+    insert_if_not_exists, insert_project_build,
+};
 use std::{fs, path::Path};
 use tokio::process::Command;
+use tokio::time::{timeout, Duration};
 use users::{get_current_gid, get_current_uid};
 use uuid::Uuid;
 
@@ -39,7 +44,6 @@ pub async fn run_nur_build(
         "unknown".to_string(),
     );
 
-    // ✅ Obtener info del último commit
     let log_output = Command::new("git")
         .args(["log", "-1", "--pretty=format:%H%n%s%n%D"])
         .current_dir(&tmp_dir)
@@ -76,9 +80,29 @@ pub async fn run_nur_build(
     let builds_dir = Path::new(&tmp_dir).join("builds");
     fs::create_dir_all(&builds_dir)?;
 
+    let insert_result = insert_project_build(
+        &client,
+        &project_id,
+        &commit_hash,
+        &branchname,
+        repo_id,
+        &commit_msg,
+    )
+    .await;
+
+    match insert_result {
+        Ok(body) => println!("📬 Inserted build in Supabase: {}", body),
+        Err(e) => println!("❌ Failed to insert build in Supabase: {}", e),
+    }
+
+    let build_id = get_build_id(&client).await?;
+
     println!("🔍 Found {} functions:", config.functions.len());
     for func in &config.functions {
         println!("• {}", func.name);
+        if let Err(e) = insert_if_not_exists(&client, &project_id, &func.name).await {
+            println!("⚠️ Failed to insert '{}': {}", func.name, e);
+        }
     }
 
     for func in config.functions {
@@ -91,25 +115,20 @@ pub async fn run_nur_build(
             _ => return Err(format!("Unsupported template: {}", func.template).into()),
         };
 
+        let container_name = format!("nur-build-{}", func.name);
         let docker_command = format!(
-            "docker run --rm -v {tmp_dir}:/app -w /app/{dir} --user {uid}:{gid} {image} sh -c '{}'",
+            "docker run --name {container_name} \
+        -v {tmp_dir}:/app \
+        -w /app/{dir} \
+        --user {uid}:{gid} \
+        {image} sh -c '{}'",
             func.build.command,
+            container_name = container_name,
             dir = func.directory.trim_start_matches('/')
         );
 
-        println!("🐳 Running build: {}", docker_command);
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(&docker_command)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            println!(
-                "❌ Build failed for {}:\n{}",
-                func.name,
-                String::from_utf8_lossy(&output.stderr)
-            );
+        if let Err(e) = run_docker_build(&container_name, &docker_command, 60, true).await {
+            println!("{}", e);
             continue;
         }
 
@@ -117,24 +136,22 @@ pub async fn run_nur_build(
 
         let output_path = Path::new(&tmp_dir)
             .join(func.directory.trim_start_matches('/'))
-            .join(&func.build.output.trim_start_matches('/'));
+            .join(func.build.output.trim_start_matches('/'));
 
-        // ✅ Copiar como "function.wasm"
         let wasm_dest = builds_dir.join("function.wasm");
         println!("📁 Copying output to: {}", wasm_dest.display());
         fs::copy(&output_path, &wasm_dest)?;
 
-        // ✅ Crear ZIP por función (con el archivo renombrado)
-        let zip_path = builds_dir.join(format!("{}.zip", func.name));
+        let zip_path = builds_dir.join(format!("{}.wasm.zstd", func.name));
         println!(
-            "📦 Zipping {} -> {}",
+            "📦 Compressing to .zstd {} -> {}",
             wasm_dest.display(),
             zip_path.display()
         );
-        crate::nur::zip::zip_any(&wasm_dest, &zip_path)?;
+        crate::nur::compress::compress_to_zstd(&wasm_dest, &zip_path)?;
 
-        // ✅ Subir ZIP a S3
-        let s3_key = format!("builds/{}.zip", func.name);
+        let function_id = get_function_id(&client, &project_id, &func.name).await?;
+        let s3_key = format!("builds/{}.wasm.zstd", function_id);
         println!(
             "☁️ Uploading {} to s3://{}/{}",
             func.name, s3_bucket, s3_key
@@ -143,20 +160,18 @@ pub async fn run_nur_build(
         println!("✅ Uploaded to s3://{}/{}", s3_bucket, s3_key);
 
         fs::remove_file(&wasm_dest)?;
-    }
-    let insert_result = insert_project_build(
-        &client,
-        &project_id,
-        &commit_hash,
-        &branchname,
-        &repo_id,
-        &commit_msg,
-    )
-    .await;
 
-    match insert_result {
-        Ok(body) => println!("📬 Inserted build in Supabase: {}", body),
-        Err(e) => println!("❌ Failed to insert build in Supabase: {}", e),
+        let insert_result = timeout(
+            Duration::from_secs(10),
+            insert_function_deployed(&client, &function_id, &build_id, "success"),
+        )
+        .await;
+
+        match insert_result {
+            Ok(Ok(_)) => println!("✅ Marked function '{}' as deployed", func.name),
+            Ok(Err(e)) => println!("⚠️ Insert failed '{}': {}", func.name, e),
+            Err(_) => println!("⏳ Timed out marking '{}' as deployed", func.name),
+        }
     }
 
     Ok(())
