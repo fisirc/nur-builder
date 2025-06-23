@@ -1,22 +1,17 @@
-use aws_config::timeout::TimeoutConfig;
 use aws_config::Region;
 use aws_config::{meta::region::RegionProviderChain, BehaviorVersion};
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
-use dotenvy::dotenv;
 use std::{env, path::Path};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
-use tokio::time::Duration;
 
 pub async fn upload_to_s3(
     bucket: &str,
     key: &str,
     file_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    dotenv()?;
-
     if !file_path.exists() {
         return Err(format!("File does not exist: {}", file_path.display()).into());
     }

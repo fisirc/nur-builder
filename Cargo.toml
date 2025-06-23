@@ -24,3 +24,4 @@ users = "0.11.0"
 postgrest = "1.6.0"
 zstd = "0.13.3"
 futures = "0.3.31"
+bollard = { version = "0.19.1"}

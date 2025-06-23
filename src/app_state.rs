@@ -1,6 +1,6 @@
+use jsonwebtoken::EncodingKey;
 use reqwest::Client;
 use std::env;
-use jsonwebtoken::EncodingKey;
 
 pub struct AppState {
     pub client: Client,
@@ -10,8 +10,6 @@ pub struct AppState {
 }
 
 pub fn build_app_state() -> Result<AppState, Box<dyn std::error::Error>> {
-    dotenvy::dotenv().ok();
-
     let app_id = env::var("APP_ID")?;
     let webhook_secret = env::var("WEBHOOK_SECRET")?;
     let private_key_path = env::var("PRIVATE_KEY_PATH")?;

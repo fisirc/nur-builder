@@ -1,12 +1,9 @@
-use dotenvy::dotenv;
 use postgrest::Postgrest;
 use serde_json::json;
 use serde_json::Value;
 use std::env;
 
 pub fn get_supabase_client() -> Result<Postgrest, String> {
-    dotenv().ok();
-
     let url = env::var("SUPABASE_URL").map_err(|e| e.to_string())?;
     let api_key = env::var("SUPABASE_API_KEY").map_err(|e| e.to_string())?;
 
@@ -115,7 +112,10 @@ pub async fn get_project_id(client: &Postgrest, github_repo_id: &str) -> Result<
         .and_then(|id| id.as_str())
     {
         Some(id) => Ok(id.to_string()),
-        None => Err("Project ID not found".to_string()),
+        None => Err(format!(
+            "Project ID not found for github_repo_id: {}",
+            github_repo_id
+        )),
     }
 }
 
