@@ -2,10 +2,12 @@ use crate::nur::compress::compress_to_zstd;
 use crate::nur::config::NurFunction;
 use crate::nur::upload_s3::upload_to_s3;
 use crate::supabase::crud::{get_function_id, insert_function_deployed};
+use bollard::exec::StartExecResults;
+use bollard::models::{ContainerCreateBody, ExecConfig};
 use bollard::Docker;
+use futures::StreamExt;
 use postgrest::Postgrest;
 use std::path::Path;
-use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
 pub async fn build_and_deploy_function(
@@ -25,43 +27,100 @@ pub async fn build_and_deploy_function(
         "node" => "nur/node-builder",
         "go" => "nur/go-builder",
         _ => {
-            println!("❌ Unsupported template: {}", func.template);
+            println!("Unsupported template: {}", func.template);
             return;
         }
     };
+    println!("⚠️ We chose the image'{}'", image);
 
-    let docker_command = format!(
-        "docker run --rm -v {tmp_dir}:/app -w /app/{dir} --user {uid}:{gid} {image} sh -c '{}'",
-        func.build.command,
-        dir = func.directory.trim_start_matches('/')
+    let mut stream = docker.create_image(
+        Some(
+            bollard::query_parameters::CreateImageOptionsBuilder::default()
+                .from_image(image)
+                .build(),
+        ),
+        None,
+        None,
     );
 
-    println!("🐳 Running build: {}", docker_command);
+    println!("📦 Pulling image '{}'...", image);
 
-    let output = match timeout(
-        Duration::from_secs(60),
-        Command::new("sh").arg("-c").arg(&docker_command).output(),
-    )
-    .await
+    while let Some(Ok(progress)) = stream.next().await {
+        if let Some(status) = progress.status {
+            if let Some(id) = progress.id {
+                println!("→ [{:20}] {}", id, status);
+            } else {
+                println!("→ {}", status);
+            }
+        }
+    }
+
+    let container = match docker
+        .create_container(
+            None::<bollard::query_parameters::CreateContainerOptions>,
+            ContainerCreateBody {
+                image: Some(image.to_string()),
+                tty: Some(true),
+                host_config: Some(bollard::models::HostConfig {
+                    binds: Some(vec![format!("{}:/app", tmp_dir)]),
+                    ..Default::default()
+                }),
+                working_dir: Some(format!("/app/{}", func.directory.trim_start_matches('/'))),
+                user: Some(format!("{}:{}", uid, gid)),
+                ..Default::default()
+            },
+        )
+        .await
     {
-        Ok(Ok(output)) => output,
-        Ok(Err(e)) => {
-            println!("❌ Error docker '{}': {}", func.name, e);
+        Ok(c) => c,
+        Err(e) => {
+            println!("Container creation error '{}': {}", func.name, e);
             return;
         }
-        Err(_) => {
-            println!("⏳ Timeout docker '{}'", func.name);
+    };
+    let container_id = &container.id;
+
+    if let Err(e) = docker
+        .start_container(
+            container_id,
+            None::<bollard::query_parameters::StartContainerOptions>,
+        )
+        .await
+    {
+        println!("Failed to start container '{}': {}", func.name, e);
+        return;
+    }
+
+    let exec = match docker
+        .create_exec(
+            container_id,
+            ExecConfig {
+                attach_stdout: Some(true),
+                attach_stderr: Some(true),
+                cmd: Some(
+                    vec!["sh", "-c", &func.build.command]
+                        .into_iter()
+                        .map(String::from)
+                        .collect(),
+                ),
+                ..Default::default()
+            },
+        )
+        .await
+    {
+        Ok(exec) => exec,
+        Err(e) => {
+            println!("Exec creation failed '{}': {}", func.name, e);
             return;
         }
     };
 
-    if !output.status.success() {
-        println!(
-            "❌ Build failed for {}:\n{}",
-            func.name,
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return;
+    if let StartExecResults::Attached { mut output, .. } =
+        docker.start_exec(&exec.id, None).await.unwrap()
+    {
+        while let Some(Ok(msg)) = output.next().await {
+            print!("{}", msg);
+        }
     }
 
     println!("✅ Build OK: {}", func.name);
@@ -79,14 +138,13 @@ pub async fn build_and_deploy_function(
     let function_id = match get_function_id(&client, &project_id, &func.name).await {
         Ok(id) => id,
         Err(e) => {
-            println!("⚠️ Function ID error: {}", e);
+            println!("Function ID error: {}", e);
             return;
         }
     };
 
     let s3_key = format!("builds/{}.wasm.zstd", function_id);
     let _ = upload_to_s3(&s3_bucket, &s3_key, &zip_path).await;
-
     let _ = tokio::fs::remove_file(&wasm_dest).await;
 
     let insert_result = timeout(
@@ -96,8 +154,19 @@ pub async fn build_and_deploy_function(
     .await;
 
     match insert_result {
-        Ok(Ok(_)) => println!("✅ Marked function '{}' as deployed", func.name),
-        Ok(Err(e)) => println!("⚠️ Supabase insert failed '{}': {}", func.name, e),
-        Err(_) => println!("⏳ Timeout inserting '{}'", func.name),
+        Ok(Ok(_)) => println!("Marked function '{}' as deployed", func.name),
+        Ok(Err(e)) => println!("Supabase insert failed '{}': {}", func.name, e),
+        Err(_) => println!("Timeout inserting '{}'", func.name),
     }
+
+    let _ = docker
+        .remove_container(
+            container_id,
+            Some(
+                bollard::query_parameters::RemoveContainerOptionsBuilder::default()
+                    .force(true)
+                    .build(),
+            ),
+        )
+        .await;
 }
