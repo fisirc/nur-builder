@@ -1,20 +1,15 @@
-use crate::app_state::{AppState};
+use crate::app_state::AppState;
 use crate::github::jwt::create_jwt;
 use crate::github::models::GitHubPushEvent;
 use crate::nur::build::run_nur_build;
 use crate::utils::verify_signature;
 
+use axum::body::to_bytes;
+use axum::body::Body;
 use axum::extract::Request;
 use axum::http::HeaderMap;
-use axum::{
-    extract::{State},
-    http::StatusCode,
-};
-use axum::body::to_bytes;
-use axum::body::{Body};
-use std::{
-    sync::Arc,
-};
+use axum::{extract::State, http::StatusCode};
+use std::sync::Arc;
 
 pub async fn webhook_handler(
     headers: HeaderMap,
@@ -23,7 +18,9 @@ pub async fn webhook_handler(
 ) -> StatusCode {
     let (_parts, body) = req.into_parts();
     let body_bytes = to_bytes(body, usize::MAX).await.unwrap();
-    let _body_str = String::from_utf8_lossy(&body_bytes);
+    let body_str = String::from_utf8_lossy(&body_bytes);
+
+    println!("{}", body_str);
 
     // ✅ 1. Verificar firma
     if let Some(sig) = headers.get("X-Hub-Signature-256") {

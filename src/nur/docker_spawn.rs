@@ -9,7 +9,9 @@ use futures::StreamExt;
 use postgrest::Postgrest;
 use std::path::Path;
 use tokio::time::{timeout, Duration};
+use tracing::{error, warn};
 
+#[tracing::instrument(skip(docker, client))]
 pub async fn build_and_deploy_function(
     docker: &Docker,
     func: NurFunction,
@@ -123,17 +125,41 @@ pub async fn build_and_deploy_function(
         }
     }
 
+    let exec_inspect = docker.inspect_exec(&exec.id).await;
+    if let Ok(info) = exec_inspect {
+        if let Some(exit_code) = info.exit_code {
+            if exit_code != 0 {
+                println!(
+                    "⚠️ Build failed for '{}', exit code: {}",
+                    func.name, exit_code
+                );
+                return;
+            }
+        }
+    }
+
     println!("✅ Build OK: {}", func.name);
 
     let output_path = Path::new(&tmp_dir)
         .join(func.directory.trim_start_matches('/'))
         .join(func.build.output.trim_start_matches('/'));
 
+    if !output_path.exists() {
+        error!("Output path does not exist: {:?}", output_path);
+        return;
+    }
+
     let wasm_dest = builds_dir.join(format!("{}.wasm", func.name));
-    let _ = tokio::fs::copy(&output_path, &wasm_dest).await;
+    if let Err(e) = tokio::fs::copy(&output_path, &wasm_dest).await {
+        error!("Failed to copy wasm output: {}", e);
+        return;
+    }
 
     let zip_path = builds_dir.join(format!("{}.wasm.zstd", func.name));
-    let _ = compress_to_zstd(&wasm_dest, &zip_path);
+    if let Err(e) = compress_to_zstd(&wasm_dest, &zip_path) {
+        error!("Compression failed: {}", e);
+        return;
+    }
 
     let function_id = match get_function_id(&client, &project_id, &func.name).await {
         Ok(id) => id,
@@ -144,8 +170,13 @@ pub async fn build_and_deploy_function(
     };
 
     let s3_key = format!("builds/{}.wasm.zstd", function_id);
-    let _ = upload_to_s3(&s3_bucket, &s3_key, &zip_path).await;
-    let _ = tokio::fs::remove_file(&wasm_dest).await;
+    if let Err(e) = upload_to_s3(&s3_bucket, &s3_key, &zip_path).await {
+        error!("Upload to S3 failed: {}", e);
+        return;
+    }
+    if let Err(e) = tokio::fs::remove_file(&wasm_dest).await {
+        warn!("Could not remove intermediate file: {}", e);
+    }
 
     let insert_result = timeout(
         Duration::from_secs(10),
@@ -159,7 +190,7 @@ pub async fn build_and_deploy_function(
         Err(_) => println!("Timeout inserting '{}'", func.name),
     }
 
-    let _ = docker
+    if let Err(e) = docker
         .remove_container(
             container_id,
             Some(
@@ -168,5 +199,8 @@ pub async fn build_and_deploy_function(
                     .build(),
             ),
         )
-        .await;
+        .await
+    {
+        warn!("Failed to remove container '{}': {}", func.name, e);
+    }
 }

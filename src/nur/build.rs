@@ -4,6 +4,8 @@ use crate::supabase::crud::{
     get_build_id, get_project_id, get_supabase_client, insert_if_not_exists, insert_project_build,
 };
 use bollard::Docker;
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use std::path::Path;
 use tokio::process::Command;
 use users::{get_current_gid, get_current_uid};
@@ -98,18 +100,30 @@ pub async fn run_nur_build(
     let uid = get_current_uid();
     let gid = get_current_gid();
 
+    let mut tasks = FuturesUnordered::new();
+
     for func in config.functions {
+        let docker = docker.clone();
         let tmp_dir = tmp_dir.clone();
         let builds_dir = builds_dir.clone();
-        let client = client.clone();
+        let client = get_supabase_client()?;
         let s3_bucket = s3_bucket.clone();
         let project_id = project_id.clone();
         let build_id = build_id.clone();
-        println!("⚠️ Calling function to build and deploy'{}'", func.name);
-        build_and_deploy_function(
-            &docker, func, tmp_dir, builds_dir, uid, gid, client, s3_bucket, project_id, build_id,
-        )
-        .await;
+
+        tasks.push(tokio::spawn(async move {
+            build_and_deploy_function(
+                &docker, func, tmp_dir, builds_dir, uid, gid, client, s3_bucket, project_id,
+                build_id,
+            )
+            .await;
+        }));
+    }
+
+    while let Some(res) = tasks.next().await {
+        if let Err(e) = res {
+            println!("❌ Task failed: {:?}", e);
+        }
     }
 
     println!("✅ All functions built and deployed");
