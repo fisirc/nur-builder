@@ -9,9 +9,8 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-RUN rustup target add wasm32-wasip1
 RUN rustup target add wasm32-unknown-unknown
 
 WORKDIR /app
 
-CMD ["cargo", "build", "--target", "wasm32-wasip1", "--release"]
+CMD ["cargo", "build", "--target", "wasm32-unknown-unknown", "--release"]
