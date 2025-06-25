@@ -9,7 +9,7 @@ on:
 
 jobs:
   publish:
-    uses: ./.github/workflows/publish-image.yml
+    uses: ./.github/workflows/publish-images.yml
     with:
       image: fisirc/rust-builder
       labels: |
