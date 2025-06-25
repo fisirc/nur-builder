@@ -8,13 +8,42 @@ on:
       - docker/rust/**
 
 jobs:
-  publish:
-    uses: ./.github/workflows/publish-images.yml
-    with:
-      image: fisirc/rust-builder
-      labels: |
-        maintainer=luedu1103
-        org=fisirc
-        template=rust
-      dockerfile: docker/rust/Dockerfile
-      context: docker/rust
+  push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to the Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        uses: docker/metadata-action@v5
+        id: metadata
+        with:
+          images: ghcr.io/fisirc/rust-builder
+          tags: |
+            type=sha,format=short
+            type=sha,format=long
+            type=raw,value=latest
+          labels: |
+            maintainer=luedu1103
+            org=fisirc
+            template=rust
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6.13.0
+        with:
+          context: docker/rust
+          file: docker/rust/Dockerfile
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
