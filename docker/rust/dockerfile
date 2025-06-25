@@ -14,3 +14,4 @@ RUN rustup target add wasm32-unknown-unknown
 WORKDIR /app
 
 CMD ["cargo", "build", "--target", "wasm32-unknown-unknown", "--release"]
+
