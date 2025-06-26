@@ -69,7 +69,7 @@ pub async fn build_and_deploy_function(
                     ..Default::default()
                 }),
                 working_dir: Some(format!("/app/{}", func.directory.trim_start_matches('/'))),
-                user: Some(format!("{}:{}", uid, gid)),
+                user: Some(format!("0:0")),
                 ..Default::default()
             },
         )
@@ -100,6 +100,9 @@ pub async fn build_and_deploy_function(
             ExecConfig {
                 attach_stdout: Some(true),
                 attach_stderr: Some(true),
+                attach_stdin: Some(false),
+                working_dir: Some(format!("/app/{}", func.directory.trim_start_matches('/'))),
+                user: Some(format!("0:0")),
                 cmd: Some(
                     vec!["sh", "-c", &func.build.command]
                         .into_iter()
@@ -121,6 +124,7 @@ pub async fn build_and_deploy_function(
     if let StartExecResults::Attached { mut output, .. } =
         docker.start_exec(&exec.id, None).await.unwrap()
     {
+        println!("🚀 Starting build for '{}'", func.name);
         while let Some(Ok(msg)) = output.next().await {
             print!("{}", msg);
         }
