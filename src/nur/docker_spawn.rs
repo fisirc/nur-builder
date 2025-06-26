@@ -25,7 +25,7 @@ pub async fn build_and_deploy_function(
     build_id: String,
 ) {
     let image = match func.template.to_lowercase().as_str() {
-        "rust" => "nur/rust-builder",
+        "rust" => "ghcr.io/fisirc/rust-builder:latest",
         "node" => "nur/node-builder",
         "go" => "nur/go-builder",
         _ => {
