@@ -14,7 +14,7 @@ pub async fn run_nur_build(
     clone_url: &str,
     repo_id: &u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
+    let docker = Docker::connect_with_socket_defaults().expect("Failed to connect to Docker");
 
     let tmp_dir = format!("nur-{}", Uuid::new_v4());
     let tmp_path = std::env::current_dir().unwrap().join(&tmp_dir);
