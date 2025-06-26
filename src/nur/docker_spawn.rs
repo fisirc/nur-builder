@@ -160,7 +160,7 @@ pub async fn build_and_deploy_function(
         return;
     }
 
-    let zip_path = builds_dir.join(format!("{}.wasm.zstd", func.name));
+    let zip_path = builds_dir.join(format!("{}.wasm.zst", func.name));
     if let Err(e) = compress_to_zstd(&wasm_dest, &zip_path) {
         error!("Compression failed: {}", e);
         return;
@@ -174,7 +174,7 @@ pub async fn build_and_deploy_function(
         }
     };
 
-    let s3_key = format!("builds/{}.wasm.zstd", function_id);
+    let s3_key = format!("builds/{}.wasm.zst", function_id);
     if let Err(e) = upload_to_s3(&s3_bucket, &s3_key, &zip_path).await {
         error!("Upload to S3 failed: {}", e);
         return;
