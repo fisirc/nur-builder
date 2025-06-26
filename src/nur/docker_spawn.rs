@@ -13,7 +13,7 @@ use tracing::{error, warn};
 
 #[tracing::instrument(skip(docker, client))]
 pub async fn build_and_deploy_function(
-    docker: &Docker,
+    docker: Docker,
     func: NurFunction,
     tmp_dir: String,
     builds_dir: std::path::PathBuf,
@@ -83,11 +83,11 @@ pub async fn build_and_deploy_function(
             return;
         }
     };
-    let container_id = &container.id;
+    let container_id = container.id.clone();
 
     if let Err(e) = docker
         .start_container(
-            container_id,
+            &container_id,
             None::<bollard::query_parameters::StartContainerOptions>,
         )
         .await
@@ -98,7 +98,7 @@ pub async fn build_and_deploy_function(
 
     let exec = match docker
         .create_exec(
-            container_id,
+            &container_id,
             ExecConfig {
                 attach_stdout: Some(true),
                 attach_stderr: Some(true),
@@ -195,17 +195,19 @@ pub async fn build_and_deploy_function(
         Err(_) => println!("Timeout inserting '{}'", func.name),
     }
 
-    if let Err(e) = docker
-        .remove_container(
-            container_id,
-            Some(
-                bollard::query_parameters::RemoveContainerOptionsBuilder::default()
-                    .force(true)
-                    .build(),
-            ),
-        )
-        .await
-    {
-        warn!("Failed to remove container '{}': {}", func.name, e);
-    }
+    tokio::spawn(async move {
+        if let Err(e) = docker
+            .remove_container(
+                &container_id,
+                Some(
+                    bollard::query_parameters::RemoveContainerOptionsBuilder::default()
+                        .force(true)
+                        .build(),
+                ),
+            )
+            .await
+        {
+            warn!("Failed to remove container '{}': {}", func.name, e);
+        }
+    });
 }

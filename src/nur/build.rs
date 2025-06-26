@@ -115,7 +115,7 @@ pub async fn run_nur_build(
 
         tasks.push(tokio::spawn(async move {
             build_and_deploy_function(
-                &docker,
+                docker,
                 func,
                 tmp_path_str,
                 builds_dir,
