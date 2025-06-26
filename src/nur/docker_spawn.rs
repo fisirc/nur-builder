@@ -131,10 +131,12 @@ pub async fn build_and_deploy_function(
     let exec_inspect = docker.inspect_exec(&exec.id).await;
     if let Ok(info) = exec_inspect {
         if let Some(exit_code) = info.exit_code {
-            if exit_code != 0 {
+            // We reported false positives for 137 error codes :P
+            // solo te amo a ti....
+            if exit_code != 0 && exit_code != 137 {
                 println!(
-                    "⚠️ Build failed for '{}', exit code: {}",
-                    func.name, exit_code
+                    "⚠️ Build failed for '{}', exit code: {}, exec_id={}",
+                    func.name, exit_code, &exec.id,
                 );
                 return;
             }
