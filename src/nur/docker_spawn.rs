@@ -34,6 +34,7 @@ pub async fn build_and_deploy_function(
         }
     };
     println!("⚠️ We chose the image'{}'", image);
+    println!("ROUTE: {tmp_dir}");
 
     let mut stream = docker.create_image(
         Some(
@@ -64,6 +65,8 @@ pub async fn build_and_deploy_function(
                 image: Some(image.to_string()),
                 tty: Some(true),
                 host_config: Some(bollard::models::HostConfig {
+                    memory: Some(2 * 1024 * 1024 * 1024), // 2 GB
+                    memory_swap: Some(-1),
                     binds: Some(vec![format!("{}:/app", tmp_dir)]),
                     ..Default::default()
                 }),

@@ -17,8 +17,10 @@ pub async fn run_nur_build(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
 
-    let tmp_dir = format!("/tmp/nur-{}", Uuid::new_v4());
-    tokio::fs::create_dir_all(&tmp_dir).await?;
+    let tmp_dir = format!("nur-{}", Uuid::new_v4());
+    let tmp_path = std::env::current_dir().unwrap().join(&tmp_dir);
+    let tmp_path_str = tmp_path.to_str().unwrap().to_string();
+    tokio::fs::create_dir_all(&tmp_path_str).await?;
 
     let client = get_supabase_client().map_err(|e| format!("Supabase error: {}", e))?;
     let repo_id_str = repo_id.to_string();
@@ -26,9 +28,9 @@ pub async fn run_nur_build(
 
     println!("🔗 Found Supabase project with ID: {}", project_id);
 
-    println!("📥 Cloning repo into: {}", tmp_dir);
+    println!("📥 Cloning repo into: {}", tmp_path_str);
     let output = Command::new("git")
-        .args(["clone", "--depth=1", clone_url, &tmp_dir])
+        .args(["clone", "--depth=1", clone_url, &tmp_path_str])
         .output()
         .await?;
 
@@ -48,7 +50,7 @@ pub async fn run_nur_build(
 
     let log_output = Command::new("git")
         .args(["log", "-1", "--pretty=format:%H%n%s%n%D"])
-        .current_dir(&tmp_dir)
+        .current_dir(&tmp_path_str)
         .output()
         .await?;
 
@@ -70,13 +72,13 @@ pub async fn run_nur_build(
         println!("🌿 Branch: {}", &branchname);
     }
 
-    let config_path = format!("{}/nurfile.yaml", tmp_dir);
+    let config_path = format!("{}/nurfile.yaml", tmp_path_str);
     let contents = tokio::fs::read_to_string(&config_path).await?;
     let config: NurFile = serde_yaml::from_str(&contents)?;
 
     let s3_bucket = std::env::var("S3_BUCKET")?;
 
-    let builds_dir = Path::new(&tmp_dir).join("builds");
+    let builds_dir = Path::new(&tmp_path_str).join("builds");
     tokio::fs::create_dir_all(&builds_dir).await?;
 
     let insert_result =
@@ -104,7 +106,7 @@ pub async fn run_nur_build(
 
     for func in config.functions {
         let docker = docker.clone();
-        let tmp_dir = tmp_dir.clone();
+        let tmp_path_str = tmp_path_str.clone();
         let builds_dir = builds_dir.clone();
         let client = get_supabase_client()?;
         let s3_bucket = s3_bucket.clone();
@@ -113,7 +115,15 @@ pub async fn run_nur_build(
 
         tasks.push(tokio::spawn(async move {
             build_and_deploy_function(
-                &docker, func, tmp_dir, builds_dir, uid, gid, client, s3_bucket, project_id,
+                &docker,
+                func,
+                tmp_path_str,
+                builds_dir,
+                uid,
+                gid,
+                client,
+                s3_bucket,
+                project_id,
                 build_id,
             )
             .await;
