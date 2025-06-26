@@ -133,6 +133,7 @@ pub async fn build_and_deploy_function(
         if let Some(exit_code) = info.exit_code {
             // We reported false positives for 137 error codes :P
             // solo te amo a ti....
+            println!("Exit code: {exit_code}");
             if exit_code != 0 && exit_code != 137 {
                 println!(
                     "⚠️ Build failed for '{}', exit code: {}, exec_id={}",
