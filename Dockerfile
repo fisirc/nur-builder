@@ -21,6 +21,11 @@ RUN : \
         build-base \
     && :
 
+RUN : \
+    && apk add --no-cache \
+        git \
+    && :
+
 RUN \
     --mount=type=cache,target=/app/target \
     --mount=type=cache,target=/usr/local/cargo/registry \
