@@ -4,8 +4,7 @@ use crate::supabase::crud::{
     get_build_id, get_project_id, get_supabase_client, insert_if_not_exists, insert_project_build,
 };
 use bollard::Docker;
-use futures::stream::FuturesUnordered;
-use futures::StreamExt;
+use futures::future::TryJoinAll;
 use std::path::Path;
 use tokio::process::Command;
 use users::{get_current_gid, get_current_uid};
@@ -102,7 +101,7 @@ pub async fn run_nur_build(
     let uid = get_current_uid();
     let gid = get_current_gid();
 
-    let mut tasks = FuturesUnordered::new();
+    let mut tasks = Vec::with_capacity(4);
 
     for func in config.functions {
         let docker = docker.clone();
@@ -130,11 +129,7 @@ pub async fn run_nur_build(
         }));
     }
 
-    while let Some(res) = tasks.next().await {
-        if let Err(e) = res {
-            println!("❌ Task failed: {:?}", e);
-        }
-    }
+    let _ = tasks.into_iter().collect::<TryJoinAll<_>>().await;
 
     println!("✅ All functions built and deployed");
     Ok(())
