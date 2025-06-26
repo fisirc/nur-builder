@@ -16,6 +16,9 @@ pub async fn run_nur_build(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let docker = Docker::connect_with_socket_defaults().expect("Failed to connect to Docker");
 
+    let version = docker.version().await.unwrap();
+    println!("docker version: {:?}", version);
+
     let tmp_dir = format!("nur-{}", Uuid::new_v4());
     let tmp_path = std::env::current_dir().unwrap().join(&tmp_dir);
     let tmp_path_str = tmp_path.to_str().unwrap().to_string();
