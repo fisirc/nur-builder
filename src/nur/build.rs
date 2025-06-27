@@ -3,22 +3,15 @@ use crate::nur::docker_spawn::build_and_deploy_function;
 use crate::supabase::crud::{
     get_build_id, get_project_id, get_supabase_client, insert_if_not_exists, insert_project_build,
 };
-use bollard::Docker;
-use futures::future::TryJoinAll;
+use std::error::Error;
 use std::path::Path;
 use tokio::process::Command;
-use users::{get_current_gid, get_current_uid};
 use uuid::Uuid;
 
 pub async fn run_nur_build(
     clone_url: &str,
     repo_id: &u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let docker = Docker::connect_with_socket_defaults().expect("Failed to connect to Docker");
-
-    let version = docker.version().await.unwrap();
-    println!("docker version: {:?}", version);
-
     let tmp_dir = format!("nur-{}", Uuid::new_v4());
     let tmp_path = std::env::current_dir().unwrap().join(&tmp_dir);
     let tmp_path_str = tmp_path.to_str().unwrap().to_string();
@@ -101,38 +94,51 @@ pub async fn run_nur_build(
         }
     }
 
-    let uid = get_current_uid();
-    let gid = get_current_gid();
-
-    let mut tasks = Vec::with_capacity(4);
+    let mut tasks = Vec::with_capacity(config.functions.len());
 
     for func in config.functions {
-        let docker = docker.clone();
         let tmp_path_str = tmp_path_str.clone();
         let builds_dir = builds_dir.clone();
-        let client = get_supabase_client()?;
+        let client = get_supabase_client()?; // consider cloning if needed
         let s3_bucket = s3_bucket.clone();
         let project_id = project_id.clone();
         let build_id = build_id.clone();
 
         tasks.push(tokio::spawn(async move {
-            build_and_deploy_function(
-                docker,
-                func,
+            match build_and_deploy_function(
+                &func,
                 tmp_path_str,
                 builds_dir,
-                uid,
-                gid,
                 client,
                 s3_bucket,
                 project_id,
                 build_id,
             )
-            .await;
+            .await
+            {
+                Ok(_) => Ok::<(), (String, Box<dyn Error + Send + Sync>)>(()),
+                Err(e) => Err((func.name.clone(), e)),
+            }
         }));
     }
 
-    let _ = tasks.into_iter().collect::<TryJoinAll<_>>().await;
+    let results = futures::future::try_join_all(tasks).await?;
+
+    let mut failures = 0;
+
+    for result in results {
+        match result {
+            Ok(_) => {} // build OK
+            Err((name, e)) => {
+                eprintln!("❌ Build failed for '{}': {}", name, e);
+                failures += 1;
+            }
+        }
+    }
+
+    if failures > 0 {
+        return Err(format!("{} function(s) failed to build", failures).into());
+    }
 
     println!("✅ All functions built and deployed");
     Ok(())
