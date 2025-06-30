@@ -5,7 +5,7 @@ pub struct NurFile {
     pub functions: Vec<NurFunction>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct NurFunction {
     pub name: String,
     pub directory: String,

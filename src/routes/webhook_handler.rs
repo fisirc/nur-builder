@@ -72,7 +72,7 @@ pub async fn webhook_handler(
         token,
         &event.repository.owner.name,
         &event.repository.name,
-        &"Compiling Nur functions",
+        &"Nur functions compilation",
         &event.after,
     ).await {
         Ok(check_run_id) => {
@@ -94,13 +94,16 @@ pub async fn webhook_handler(
     // ✅ 6. Ejecutar build
     let status_code: StatusCode;
     let conclusion: &str;
-    let summary: String;
+    let mut summary: String;
 
     match run_nur_build(&clone_url, &repo_id).await {
-        Ok(_) => {
+        Ok(functions) => {
             status_code = StatusCode::OK;
             conclusion = "success";
-            summary = "Functions compiled successfully!".to_string();
+            summary = "Functions compiled successfully! Summary:\n".to_string();
+            for func in functions {
+                summary.push_str(&format!("- Function: {}, Dir: {}\n", func.name, func.directory));
+            }
             println!("✅ Build completed successfully.");
         }
         Err(e) => {

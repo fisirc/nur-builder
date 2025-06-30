@@ -1,4 +1,4 @@
-use crate::nur::config::NurFile;
+use crate::nur::config::{NurFile, NurFunction};
 use crate::nur::container_spawn::build_and_deploy_function;
 use crate::supabase::crud::{
     get_build_id, get_project_id, get_supabase_client, insert_if_not_exists, insert_project_build,
@@ -11,7 +11,7 @@ use uuid::Uuid;
 pub async fn run_nur_build(
     clone_url: &str,
     repo_id: &u64,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<Vec<NurFunction>, Box<dyn std::error::Error>> {
     let tmp_dir = format!("nur-{}", Uuid::new_v4());
     let tmp_path = std::env::current_dir().unwrap().join(&tmp_dir);
     let tmp_path_str = tmp_path.to_str().unwrap().to_string();
@@ -96,6 +96,7 @@ pub async fn run_nur_build(
 
     let mut tasks = Vec::with_capacity(config.functions.len());
 
+    let cloned_funcs = config.functions.clone();
     for func in config.functions {
         let tmp_path_str = tmp_path_str.clone();
         let builds_dir = builds_dir.clone();
@@ -141,5 +142,5 @@ pub async fn run_nur_build(
     }
 
     println!("✅ All functions built and deployed");
-    Ok(())
+    Ok(cloned_funcs)
 }
