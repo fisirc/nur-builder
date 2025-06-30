@@ -33,6 +33,7 @@ pub async fn build_and_deploy_function(
         .args([
             "run",
             "--rm",
+            "--storage-driver=vfs",
             "-v",
             &format!("{host_dir}:/app"),
             "-w",
