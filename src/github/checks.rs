@@ -19,7 +19,7 @@ pub async fn create_check_run(
     let client = reqwest::Client::new();
     let res = client
         .post(&url)
-        .header("Authorization", format!("Bearer {}", token))
+        .bearer_auth(token)
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", "nur-build")
         .json(&body)
@@ -59,7 +59,7 @@ pub async fn complete_check_run(
     let client = reqwest::Client::new();
     client
         .patch(&url)
-        .header("Authorization", format!("Bearer {}", token))
+        .bearer_auth(token)
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", "nur-build")
         .json(&body)

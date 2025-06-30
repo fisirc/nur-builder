@@ -16,6 +16,12 @@ pub async fn webhook_handler(
     State(state): State<Arc<AppState>>,
     req: Request<Body>,
 ) -> StatusCode {
+    let event_type = headers.get("x-github-event").map(|h| h.to_str().unwrap_or(""));
+    if event_type != Some("push") {
+        println!("🔁 Ignoring event type: {event_type:?}");
+        return StatusCode::OK;
+    }
+
     let (_parts, body) = req.into_parts();
     let body_bytes = to_bytes(body, usize::MAX).await.unwrap();
     let _body_str = String::from_utf8_lossy(&body_bytes);
@@ -62,6 +68,23 @@ pub async fn webhook_handler(
     let token_json: serde_json::Value = token_res.json().await.unwrap();
     let token = token_json["token"].as_str().unwrap();
 
+    let check_run_id = match crate::github::checks::create_check_run(
+        token,
+        &event.repository.owner.name,
+        &event.repository.name,
+        &"Compiling Nur functions",
+        &event.after,
+    ).await {
+        Ok(check_run_id) => {
+            println!("✅ Check run created with ID: {}", check_run_id);
+            check_run_id
+        },
+        Err(e) => {
+            println!("❌ Failed to create check run: {:?}", e);
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+
     // ✅ 5. URL para clonar la repo
     let clone_url = event
         .repository
@@ -69,14 +92,40 @@ pub async fn webhook_handler(
         .replace("https://", &format!("https://x-access-token:{}@", token));
 
     // ✅ 6. Ejecutar build
+    let status_code: StatusCode;
+    let conclusion: &str;
+    let summary: String;
+
     match run_nur_build(&clone_url, &repo_id).await {
         Ok(_) => {
+            status_code = StatusCode::OK;
+            conclusion = "success";
+            summary = "Functions compiled successfully!".to_string();
             println!("✅ Build completed successfully.");
-            StatusCode::OK
         }
         Err(e) => {
+            status_code = StatusCode::INTERNAL_SERVER_ERROR;
+            conclusion = "failure";
+            summary = format!("Build failed: {:?}", e);
             println!("❌ Build error: {:?}", e);
-            StatusCode::UNPROCESSABLE_ENTITY
         }
     }
+
+    match crate::github::checks::complete_check_run(
+        token,
+        &event.repository.owner.name,
+        &event.repository.name,
+        check_run_id,
+        &conclusion,
+        &summary,
+    ).await {
+        Ok(_) => {
+            println!("🔔 Check completion notified: conclusion={conclusion}");
+        },
+        Err(e) => {
+            println!("🔔❌ Failed to notify check completion for check_run_id={check_run_id}: {e:?}");
+        }
+    };
+
+    status_code
 }
