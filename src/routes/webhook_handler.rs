@@ -72,7 +72,7 @@ pub async fn webhook_handler(
         token,
         &event.repository.owner.name,
         &event.repository.name,
-        &"Nur functions compilation",
+        "Nur functions compilation",
         &event.after,
     ).await {
         Ok(check_run_id) => {
@@ -119,7 +119,7 @@ pub async fn webhook_handler(
         &event.repository.owner.name,
         &event.repository.name,
         check_run_id,
-        &conclusion,
+        conclusion,
         &summary,
     ).await {
         Ok(_) => {

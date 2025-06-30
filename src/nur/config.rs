@@ -13,7 +13,7 @@ pub struct NurFunction {
     pub build: NurBuild,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct NurBuild {
     pub command: String,
     pub output: String,
