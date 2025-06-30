@@ -8,6 +8,7 @@ mod utils;
 use axum::routing::get;
 use axum::{routing::post, Router};
 use dotenvy::dotenv;
+use tokio::process::Command;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::signal;
@@ -26,6 +27,8 @@ async fn main() {
     //     .with_env_filter("debug,tokio=trace")
     //     .init();
 
+    tokio::spawn(let_the_shit_fail());
+
     let app_state = build_app_state().expect("Failed to build AppState");
 
     let app = Router::new()
@@ -42,6 +45,33 @@ async fn main() {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .unwrap();
+}
+
+/// It seems that it's inevitable that the first podman run
+/// will always fail. The linked issue is not resolved yet, so
+/// until that we just trigger the first podamn error.
+/// See <https://github.com/containers/podman/issues/24737>
+async fn let_the_shit_fail() {
+    let status = match Command::new("podman")
+        .args([
+            "run",
+            "--rm",
+            "-w",
+            "/tmp",
+            "ghcr.io/fisirc/rust-builder:latest",
+            "sh",
+            "-c",
+            "true",
+        ])
+        .status()
+        .await {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+
+    if !status.success() {
+        println!("Trigerring first podman fail successfully!");
+    }
 }
 
 async fn shutdown_signal() {
