@@ -37,6 +37,7 @@ WORKDIR /
 RUN : \
     && apk add --no-cache \
         git \
+        podman \
     && :
 
 COPY --from=builder /app/nur-builder /nur-builder

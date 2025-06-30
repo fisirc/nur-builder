@@ -1,5 +1,5 @@
 use crate::nur::config::NurFile;
-use crate::nur::docker_spawn::build_and_deploy_function;
+use crate::nur::container_spawn::build_and_deploy_function;
 use crate::supabase::crud::{
     get_build_id, get_project_id, get_supabase_client, insert_if_not_exists, insert_project_build,
 };
