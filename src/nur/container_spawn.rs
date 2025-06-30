@@ -23,17 +23,17 @@ pub async fn build_and_deploy_function(
         "go" => "nur/go-builder",
         _ => return Err(format!("Unsupported template: {}", func.template).into()),
     };
-    println!("⚠️ We chose the image'{}'", image);
+    println!("{f}: ⚠️ We chose the image'{}'", image, f=func.name);
 
     let work_dir = format!("/app/{}", func.directory.trim_start_matches('/'));
     let host_dir = tmp_dir.clone();
 
-    // Build using podman
+    // Build using podman (privileged mode)
     let status = Command::new("podman")
         .args([
             "run",
             "--rm",
-            "--storage-driver=vfs",
+            "--privileged",
             "-v",
             &format!("{host_dir}:/app"),
             "-w",
@@ -50,7 +50,7 @@ pub async fn build_and_deploy_function(
         return Err(format!("Build failed for '{}'", func.name).into());
     }
 
-    println!("✅ Build OK: {}", func.name);
+    println!("{f}: ✅ Build OK", f=func.name);
 
     let output_path = Path::new(&tmp_dir)
         .join(func.directory.trim_start_matches('/'))
@@ -92,6 +92,6 @@ pub async fn build_and_deploy_function(
     .await?
     .map_err(|e| format!("Insert function_deployed failed: {}", e))?;
 
-    println!("📦 Marked function '{}' as deployed", func.name);
+    println!("{f}: 📦 Marked function '{}' as deployed", func.name, f=func.name);
     Ok(())
 }

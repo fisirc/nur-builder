@@ -116,7 +116,7 @@ pub async fn run_nur_build(
             )
             .await
             {
-                Ok(_) => Ok::<(), (String, Box<dyn Error + Send + Sync>)>(()),
+                Ok(()) => Ok::<(), (String, Box<dyn Error + Send + Sync>)>(()),
                 Err(e) => Err((func.name.clone(), e)),
             }
         }));

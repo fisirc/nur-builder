@@ -12,14 +12,25 @@ RUN : \
         libgcc \
         libstdc++ \
         musl \
-    && :
-
-COPY . .
-
-RUN : \
-    && apk add --no-cache \
         build-base \
     && :
+
+COPY Cargo.toml .
+COPY Cargo.lock .
+
+RUN \
+    --mount=type=cache,target=/app/target \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    : \
+    && mkdir src \
+    && echo "fn main() {}" > src/main.rs \
+    && cargo build --target x86_64-unknown-linux-musl --release \
+    && rm -f /app/target/x86_64-unknown-linux-musl/release/deps/nur_builder* \
+    && rm -rf src \
+    && :
+
+COPY src src
 
 RUN \
     --mount=type=cache,target=/app/target \
@@ -27,7 +38,8 @@ RUN \
     --mount=type=cache,target=/usr/local/cargo/git \
     : \
     && cargo build --target x86_64-unknown-linux-musl --release \
-    && mv /app/target/x86_64-unknown-linux-musl/release/nur-builder /app/nur-builder \
+    && cp /app/target/x86_64-unknown-linux-musl/release/nur-builder /app/nur-builder \
+    && chmod +x /app/nur-builder \
     && :
 
 FROM alpine:3.22
@@ -38,7 +50,8 @@ RUN : \
     && apk add --no-cache \
         git \
         podman \
-	iptables \
+        iptables \
+        fuse-overlayfs \
     && :
 
 COPY --from=builder /app/nur-builder /nur-builder
