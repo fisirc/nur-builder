@@ -38,6 +38,7 @@ RUN : \
     && apk add --no-cache \
         git \
         podman \
+	iptables \
     && :
 
 COPY --from=builder /app/nur-builder /nur-builder
